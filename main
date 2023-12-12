@@ -1,0 +1,161 @@
+import sys
+from PyQt5 import QtCore, QtGui, QtWidgets
+from PIL import ImageGrab
+import cv2
+from pyzbar.pyzbar import decode
+import pyperclip
+import keyboard
+
+class SnippingWidget(QtWidgets.QMainWindow):
+    closed = QtCore.pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super(SnippingWidget, self).__init__(parent)
+        self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        self.setStyleSheet("background:transparent;")
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+
+        self.outsideSquareColor = "White"
+        self.squareThickness = 1
+
+        self.start_point = QtCore.QPoint()
+        self.end_point = QtCore.QPoint()
+
+    def mousePressEvent(self, event):
+        self.start_point = event.pos()
+        self.end_point = event.pos()
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        self.end_point = event.pos()
+        self.update()
+
+    def mouseReleaseEvent(self, QMouseEvent):
+        r = QtCore.QRect(self.start_point, self.end_point).normalized()
+        self.hide()
+        img = ImageGrab.grab(bbox=r.getCoords())
+        img.save("testpic/testImage.png")
+
+        qr_code_data = self.decode_qr_code("testpic/testImage.png")
+        if qr_code_data:
+            self.closed.emit(qr_code_data)
+        else:
+            self.closed.emit("QR-код не обнаружен")
+
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self.start_point = QtCore.QPoint()
+        self.end_point = QtCore.QPoint()
+
+    def paintEvent(self, event):
+        trans = QtGui.QColor(0, 0, 0)
+        r = QtCore.QRectF(self.start_point, self.end_point).normalized()
+        qp = QtGui.QPainter(self)
+        trans.setAlphaF(0.5)
+        qp.setBrush(trans)
+        outer = QtGui.QPainterPath()
+        outer.addRect(QtCore.QRectF(self.rect()))
+        inner = QtGui.QPainterPath()
+        inner.addRect(r)
+        r_path = outer - inner
+        qp.drawPath(r_path)
+        qp.setPen(
+            QtGui.QPen(QtGui.QColor(self.outsideSquareColor), self.squareThickness)
+        )
+        trans.setAlphaF(0)
+        qp.setBrush(trans)
+        qp.drawRect(r)
+
+    def decode_qr_code(self, image_path):
+        image = cv2.imread(image_path)
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        qr_codes = decode(gray_image)
+
+        if qr_codes:
+            return qr_codes[0].data.decode('utf-8')
+        else:
+            return None
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.close()
+
+class ErrorDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super(ErrorDialog, self).__init__(parent)
+        self.setWindowTitle("Ошибка")
+        self.resize(300, 100)
+
+        label = QtWidgets.QLabel("QR-код не обнаружен")
+        ok_button = QtWidgets.QPushButton("Повторить сканирование")
+        ok_button.clicked.connect(self.accept)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(label, alignment=QtCore.Qt.AlignCenter)
+        layout.addWidget(ok_button, alignment=QtCore.Qt.AlignCenter)
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.close()
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.centralWidget = QtWidgets.QWidget()
+        self.setCentralWidget(self.centralWidget)
+
+        self.text_edit = QtWidgets.QTextEdit()
+        self.button = QtWidgets.QPushButton('Сканировать QR-код')
+        self.button.clicked.connect(self.activateSnipping)
+
+        layout = QtWidgets.QVBoxLayout(self.centralWidget)
+        layout.addWidget(self.text_edit, 1)
+        layout.addWidget(self.button, 0)
+
+        self.snipper = SnippingWidget()
+        self.snipper.closed.connect(self.on_closed)
+
+        self.error_dialog = ErrorDialog()
+
+    def activateSnipping(self):
+        self.snipper.showFullScreen()
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
+        self.hide()
+
+    def on_closed(self, result):
+        if "не обнаружен" in result:
+            self.error_dialog.exec_()
+            self.activateSnipping()
+        else:
+            self.text_edit.setPlainText(result)
+            pyperclip.copy(result)
+            self.show()
+            self.adjustSize()
+
+    def closeEvent(self, event):
+        reply = QtWidgets.QMessageBox.question(
+            self, 'Выход', 'Вы уверены, что хотите выйти?',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+
+        if reply == QtWidgets.QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.close()
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    w = MainWindow()
+    w.resize(400, 300)
+    w.show()
+
+    def hotkey_pressed(e):
+        if keyboard.is_pressed('ctrl+q'):
+            w.activateSnipping()
+
+    keyboard.hook(hotkey_pressed)
+
+    sys.exit(app.exec_())
